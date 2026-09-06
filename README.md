@@ -32,7 +32,7 @@ A viewer types in chat — a few seconds later the in-game phone rings with thei
 name on screen. Pick up and you hear their line in the chosen character's voice.
 Decline it or miss it, and the line is gone along with the call.
 
-You can configure call access to be limited to subscribers only, to require Twitch Bits, or to integrate the DonationAlers API so that a voice actor reads out donation comments over the phone. Learn more about the mod's settings — [docs/twitch.md](docs/twitch.md)
+You can configure call access to be limited to subscribers only, to require Twitch Bits, or to integrate the DonationAlerts API so that a voice actor reads out donation comments over the phone. Learn more about the mod's settings — [docs/twitch.md](docs/twitch.md)
 
 <sub>More about how it's built — [docs/internals.md](docs/internals.md)</sub>
 
