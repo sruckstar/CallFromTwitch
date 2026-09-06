@@ -47,7 +47,7 @@ The text source is switched in the config: Twitch chat or the file
 | [iFruit Jailbreak](https://github.com/sruckstar/iFruitJailbreak) | 5.0+ | incoming call screen; `iFruit Jailbreak.dll` in `scripts\` |
 | .NET Framework | 4.8 | the mod's runtime |
 | Python | **3.10** | voice server (`fairseq` won't build on 3.11+) |
-| NVIDIA GPU | ~2 GB VRAM | real-time RVC (CPU works too, but slowly) |
+| GPU | ~2 GB VRAM | real-time RVC (CPU works too, but slowly) |
 | [MSVC Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | 2019+ | `fairseq` builds a C extension from source |
 
 ## Installation
