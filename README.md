@@ -58,6 +58,9 @@ One PowerShell command — it clones the repository and adds the `cft` command:
 irm https://raw.githubusercontent.com/sruckstar/CallFromTwitch/main/bootstrap.ps1 | iex
 ```
 
+It clones into `CallFromTwitch` in the current folder. To put it elsewhere, set
+`$env:CFT_PATH = 'D:\dev\CallFromTwitch'` before running the command.
+
 Then, in order:
 
 ```powershell
