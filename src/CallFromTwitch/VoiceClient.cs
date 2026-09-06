@@ -1,0 +1,137 @@
+using System;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace CallFromTwitch
+{
+    /// <summary>
+    /// Talks to the local Python voice server (Piper TTS -> RVC).
+    /// Everything here runs off the game thread; the caller polls the Task.
+    /// </summary>
+    internal sealed class VoiceClient : IDisposable
+    {
+        private readonly HttpClient _http;
+
+        public VoiceClient(string baseUrl, int timeoutSeconds)
+        {
+            Uri baseAddress;
+            string normalized = (baseUrl ?? string.Empty).TrimEnd('/') + "/";
+            if (!Uri.TryCreate(normalized, UriKind.Absolute, out baseAddress))
+                throw new VoiceServerException(string.Format(
+                    "server address '{0}' is not a valid URL - check [Server] Host/Port in CallFromTwitch.ini",
+                    baseUrl));
+
+            _http = new HttpClient
+            {
+                BaseAddress = baseAddress,
+                Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+            };
+        }
+
+        /// <summary>Returns raw WAV bytes for <paramref name="text"/> in the given character voice.</summary>
+        public async Task<byte[]> SynthesizeAsync(string text, string voice, CancellationToken token)
+        {
+            // Hand-rolled: the payload is two short strings, and a serializer
+            // would mean shipping another DLL alongside the script.
+            string payload = "{\"text\":" + JsonString(text) + ",\"voice\":" + JsonString(voice) + "}";
+
+            using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
+            using (var response = await _http.PostAsync("speak", content, token).ConfigureAwait(false))
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    throw new VoiceServerException(
+                        string.Format("server returned {0}: {1}", (int)response.StatusCode, Trim(body, 200)));
+                }
+
+                return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Fetches the paid events (channel points, donations) the server has
+        /// collected since the last call, as raw JSON - parsing belongs next to
+        /// the type that knows the shape.
+        ///
+        /// The timeout is short on purpose: the request repeats every second,
+        /// so one that hung for the synthesis timeout would stack up.
+        /// </summary>
+        public async Task<string> FetchEventsAsync(int limit, CancellationToken token)
+        {
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token))
+            using (var response = await _http.GetAsync("events?limit=" + limit, linked.Token).ConfigureAwait(false))
+            {
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>True if the server answers /health. Used to warn the player early.</summary>
+        public async Task<bool> IsAliveAsync(CancellationToken token)
+        {
+            try
+            {
+                using (var response = await _http.GetAsync("health", token).ConfigureAwait(false))
+                {
+                    return response.IsSuccessStatusCode;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string Trim(string value, int max)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            value = value.Replace('\n', ' ').Replace('\r', ' ');
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+
+        private static string JsonString(string value)
+        {
+            var sb = new StringBuilder(value.Length + 2);
+            sb.Append('"');
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        // Control chars and everything non-ASCII, so the body
+                        // survives however the server decodes it.
+                        if (c < 0x20 || c > 0x7E)
+                            sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else
+                            sb.Append(c);
+                        break;
+                }
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        public void Dispose()
+        {
+            _http.Dispose();
+        }
+    }
+
+    internal sealed class VoiceServerException : Exception
+    {
+        public VoiceServerException(string message) : base(message) { }
+    }
+}

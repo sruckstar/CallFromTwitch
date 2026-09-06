@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="280" viewBox="0 0 1000 280" role="img" aria-label="CallFromTwitch — GTA V x Twitch, your chat calls you in-game">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1030"/>
+      <stop offset="55%" stop-color="#2a1a4a"/>
+      <stop offset="100%" stop-color="#3b1d3d"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c9a3ff"/>
+      <stop offset="50%" stop-color="#a970ff"/>
+      <stop offset="100%" stop-color="#f0a02a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#a970ff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#a970ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="280" rx="14" fill="url(#bg)"/>
+  <g opacity="0.5">
+    <path d="M0 232 L1000 232" stroke="#f0a02a" stroke-opacity="0.25" stroke-width="1"/>
+    <path d="M0 233 L1000 233" stroke="#a970ff" stroke-opacity="0.2" stroke-width="1"/>
+  </g>
+  <ellipse cx="150" cy="120" rx="190" ry="150" fill="url(#glow)" filter="url(#soft)"/>
+
+  <!-- Twitch glitch mark -->
+  <g transform="translate(72,74) scale(1.15)">
+    <path d="M8 0 L0 20 L0 78 L22 78 L22 92 L36 78 L54 78 L80 52 L80 0 Z"
+          fill="#a970ff"/>
+    <path d="M14 6 L14 68 L30 68 L30 82 L44 68 L58 68 L74 52 L74 6 Z" fill="#1a1030"/>
+    <rect x="36" y="22" width="7" height="26" rx="2" fill="#a970ff"/>
+    <rect x="56" y="22" width="7" height="26" rx="2" fill="#a970ff"/>
+  </g>
+
+  <!-- Phone receiver, ringing -->
+  <g transform="translate(846,74) scale(0.92)" stroke="#f0a02a" stroke-width="5" fill="none" stroke-linecap="round">
+    <path d="M6 14 C6 6 12 0 20 2 L34 6 C40 8 42 14 40 20 L36 30 C46 44 58 56 72 66 L82 62
+             C88 60 94 62 96 68 L100 82 C102 90 96 96 88 96 C44 92 6 56 6 14 Z"
+          fill="#f0a02a" fill-opacity="0.16"/>
+    <path d="M-14 22 C-22 12 -22 -2 -14 -12" stroke-opacity="0.75"/>
+    <path d="M-28 34 C-42 16 -42 -8 -28 -26" stroke-opacity="0.45"/>
+  </g>
+
+  <text x="500" y="126" text-anchor="middle"
+        font-family="Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="76" font-weight="800" letter-spacing="-1.5"
+        fill="url(#title)">CallFromTwitch</text>
+
+  <text x="500" y="172" text-anchor="middle"
+        font-family="Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="23" font-weight="600" letter-spacing="5.5"
+        fill="#e8dcff" fill-opacity="0.92">GTA V &#215; TWITCH</text>
+
+  <text x="500" y="212" text-anchor="middle"
+        font-family="Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="19" fill="#b9a8d8">
+    A viewer types in chat — your in-game phone rings in a GTA V voice
+  </text>
+
+  <text x="500" y="258" text-anchor="middle"
+        font-family="Consolas, SF Mono, monospace"
+        font-size="16" fill="#f0a02a" fill-opacity="0.88">
+    !call hey, what's going on out there
+  </text>
+</svg>

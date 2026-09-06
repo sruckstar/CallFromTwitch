@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Character voices for RVC. The model files are far too large for git, so",
+    "they are downloaded on first install instead.",
+    "",
+    "Each entry needs a 'url' pointing at a direct download. Two shapes work:",
+    "  * a .zip holding the voice's .pth and .index (any nesting - the archive",
+    "    is flattened into models/rvc/<name>/)",
+    "  * a bare .pth, with the matching .index given as 'index_url'",
+    "",
+    "'sha256' is optional; when present the download is verified against it.",
+    "'size_mb' is only used to show a sensible progress bar before the server",
+    "reports Content-Length.",
+    "",
+    "Host these anywhere that serves the file directly: a GitHub release asset,",
+    "Hugging Face (.../resolve/main/...), or your own storage. A Google Drive or",
+    "Mega share page is NOT a direct link and will download an HTML page.",
+    "",
+    "Voices are also perfectly fine to install by hand: drop <Name>/<any>.pth",
+    "into models/rvc/ and the server picks it up with no manifest entry at all."
+  ],
+  "voices": {
+    "Michael": {
+      "url": "",
+      "size_mb": 147,
+      "description": "Michael De Santa - GTA V"
+    },
+    "Franklin": {
+      "url": "",
+      "size_mb": 130,
+      "description": "Franklin Clinton - GTA V"
+    },
+    "Trevor": {
+      "url": "",
+      "size_mb": 180,
+      "description": "Trevor Philips - GTA V"
+    }
+  }
+}

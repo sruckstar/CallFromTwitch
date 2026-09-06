@@ -1,0 +1,17 @@
+# Web layer
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# TTS: Piper (GPL-3.0) - fast local neural synthesis
+piper-tts==1.7.0
+
+# Voice conversion: RVC. Needs pip<24.1 (omegaconf 2.0.6 metadata) - see setup.bat.
+rvc-python==0.1.5
+
+# Audio plumbing
+numpy<2
+soundfile==0.12.1
+
+# Channel points (EventSub) and DonationAlerts, both websocket feeds. Already
+# pulled in by uvicorn[standard], named here because events.py imports it directly.
+websockets>=12.0

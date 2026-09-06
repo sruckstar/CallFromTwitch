@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CallFromTwitch</AssemblyName>
+    <RootNamespace>CallFromTwitch</RootNamespace>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- SHVDN loads the .dll directly from scripts/; no exe host is produced. -->
+    <OutputType>Library</OutputType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.1.0</Version>
+    <!-- Copy NAudio next to the script so SHVDN can resolve it. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IFruitJailbreakPath)' == ''">
+    <IFruitJailbreakPath>$(MSBuildThisFileDirectory)..\..\lib\iFruit Jailbreak.dll</IFruitJailbreakPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ScriptHookVDotNet3">
+      <HintPath>..\..\ScriptHookVDotNet3.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The phone UI: iFruit Jailbreak drives the incoming-call screen.
+         Its DLL lives in GTA V\scripts\ and is loaded by SHVDN, not by us,
+         so this is a compile-time reference only (Private=false). Override
+         the path with -p:IFruitJailbreakPath=... when it sits elsewhere. -->
+    <Reference Include="iFruit Jailbreak">
+      <HintPath>$(IFruitJailbreakPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+</Project>
