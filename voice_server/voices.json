@@ -21,18 +21,18 @@
   ],
   "voices": {
     "Michael": {
-      "url": "",
-      "size_mb": 147,
+      "url": "https://github.com/sruckstar/CallFromTwitch/releases/download/voices/Michael.zip",
+      "size_mb": 105,
       "description": "Michael De Santa - GTA V"
     },
     "Franklin": {
-      "url": "",
-      "size_mb": 130,
+      "url": "https://github.com/sruckstar/CallFromTwitch/releases/download/franklins_voice/Franklin.zip",
+      "size_mb": 95,
       "description": "Franklin Clinton - GTA V"
     },
     "Trevor": {
-      "url": "",
-      "size_mb": 180,
+      "url": "https://github.com/sruckstar/CallFromTwitch/releases/download/trevors_voice/Trevor.zip",
+      "size_mb": 144,
       "description": "Trevor Philips - GTA V"
     }
   }
