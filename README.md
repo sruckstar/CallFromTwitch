@@ -63,6 +63,7 @@ It clones into `CallFromTwitch` in the current folder. To put it elsewhere, set
 Then, in order:
 
 ```powershell
+winget install Git.Git Python.Python.3.10 Microsoft.DotNet.SDK.8    #Installing Dependencies 
 cft install    # voice server: venv, PyTorch+CUDA, Piper, RVC (asks for a drive; several GB)
 cft deploy     # build the mod and drop it into GTA V (finds the game on its own)
 cft config     # settings: channel, voice, call
