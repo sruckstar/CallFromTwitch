@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     One-command install for CallFromTwitch: clone the repo, then set up "cft".
 
