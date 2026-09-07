@@ -184,6 +184,20 @@ class CallStore:
                          len(bucket) - len(fresh), self._max_age)
                 bucket[:] = fresh
 
+    def configure(self, max_pending: int, max_age: float) -> None:
+        """
+        Takes new limits from a reloaded ini.
+
+        Applied to what is already queued as well as to what arrives next: a
+        streamer who just cut MaxQueue did it because the backlog is too long
+        right now, and leaving the existing one alone would answer the wrong
+        question. Nothing is dropped here, though - the next submit and the
+        next expiry sweep do that, in the order they already use.
+        """
+        with self._lock:
+            self._max_pending = max_pending
+            self._max_age = max_age
+
     def stats(self) -> dict:
         with self._lock:
             return {

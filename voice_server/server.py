@@ -4,12 +4,16 @@ CallFromTwitch voice server.
 Piper TTS renders neutral speech, RVC converts the timbre to the chosen
 character, and a telephone filter colours the result. Models stay resident.
 
-The mod does not synthesise anything itself and does not wait on a response,
-because a paused game runs no script code at all - see calls.py. It posts text
-to /submit, and asks /call whether something is ready; the audio it takes is
-kept here until /call/ack says it arrived.
+Every way a viewer can ask for a call arrives here, on this process's own
+sockets: chat over IRC (chat.py), redemptions over EventSub and donations over
+Centrifugo (events.py). None of it depends on the game running. A message that
+arrives with GTA closed is filtered, synthesised and held, and the mod finds it
+waiting whenever it starts.
 
-  POST /submit    {"text": "...", "user": "..."} -> queued for synthesis
+The mod neither synthesises nor waits on a response, because a paused game runs
+no script code at all - see calls.py. It asks /call whether something is ready;
+the audio it takes is kept here until /call/ack says it arrived.
+
   GET  /call                                     -> the ready call, or none
   GET  /call/<id>/audio                          -> its WAV bytes
   POST /call/ack  {"id": "c7"}                   -> the game has it; drop it
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -29,7 +34,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import calls as calls_module
+import chat as chat_module
 import events as events_module
+import mod_ini
 import phone_fx
 from config import Config
 from tts_engine import TTSEngine
@@ -58,14 +65,49 @@ phone: Optional[phone_fx.PhoneFX] = None
 active_voice: str = config.default_voice
 # Always present; it simply starts nothing when unconfigured.
 hub: events_module.EventHub = events_module.EventHub(config)
-# Spoken calls waiting for a game that may be sitting in its pause menu.
+# Spoken calls waiting for a game that may be sitting in its pause menu. The
+# limits below are the fallback for a missing ini; MaxQueue and MaxAgeSeconds
+# replace them as soon as one is found.
 store: calls_module.CallStore = calls_module.CallStore(
     max_pending=config.call_max_pending, max_age=config.call_max_age
 )
 worker: Optional[calls_module.CallWorker] = None
-# Which paid events become calls. Replaced by whatever the mod sends to
-# /rules, so CallFromTwitch.ini stays the one place these are edited.
-rules: calls_module.Rules = calls_module.Rules()
+
+
+def queue_chat_call(text: str, user: str, kind: str) -> bool:
+    """
+    A chat line that passed every rule, on its way to being spoken.
+
+    Returns False when the store refused it, which is what a full queue looks
+    like from the reader thread - it counts those so /health can say so.
+    """
+    return store.submit(text, user or "Viewer", kind) is not None
+
+
+def rules_from(settings) -> calls_module.Rules:
+    """The paid-event thresholds, as the streamer wrote them in the ini."""
+    return calls_module.Rules(
+        allow_points=settings.allow_points,
+        allow_donations=settings.allow_donations,
+        allow_bits=settings.allow_bits,
+        min_donation=settings.min_donation,
+        min_bits=settings.min_bits,
+        min_length=settings.min_length,
+        max_length=settings.max_length,
+        default_text=settings.default_event_text or calls_module.Rules.default_text,
+    )
+
+
+# CallFromTwitch.ini, read from wherever the game reads it. The streamer edits
+# one file; both halves obey it. The mod no longer sends its settings up,
+# because chat has to work with the game closed and a closed game pushes
+# nothing.
+settings_file: mod_ini.SettingsFile = mod_ini.SettingsFile(mod_ini.locate())
+# Which paid events become calls, derived from that ini.
+rules: calls_module.Rules = rules_from(settings_file.settings)
+# Chat rules and the socket that feeds them. Both read the same settings.
+chat_rules: chat_module.ChatRules = chat_module.ChatRules(settings_file.settings)
+chat_client: chat_module.TwitchChat = chat_module.TwitchChat(chat_rules, queue_chat_call)
 
 
 def set_window_title(text: str) -> None:
@@ -86,27 +128,6 @@ class SpeakRequest(BaseModel):
     # a name coming in per request used to override that choice silently.
     # Kept for test_client.py, which needs to audition one model on purpose.
     voice: Optional[str] = None
-
-
-class SubmitRequest(BaseModel):
-    """A line the mod wants spoken, handed over without waiting for it."""
-
-    text: str = Field(..., min_length=1)
-    user: str = ""
-    kind: str = "chat"
-
-
-class RulesRequest(BaseModel):
-    """The mod's INI filters, pushed up so the server can apply them itself."""
-
-    allow_points: bool = True
-    allow_donations: bool = True
-    allow_bits: bool = True
-    min_donation: float = 0.0
-    min_bits: int = 1
-    min_length: int = 2
-    max_length: int = 300
-    default_text: str = ""
 
 
 class AckRequest(BaseModel):
@@ -195,7 +216,80 @@ def startup() -> None:
     # into calls here, the moment the socket delivers them.
     hub.on_event = queue_event
 
+    # An ini saved mid-stream reaches both readers without a restart. Watched
+    # on a thread of our own rather than off an incoming request: the game may
+    # be closed for hours, and chat still has to obey what the streamer saved.
+    settings_file.on_change = apply_settings
+    if settings_file.path is not None:
+        apply_queue_limits(settings_file.settings)
+    _watch_settings()
+    _report_settings_source()
+
+    # Chat, on this process's socket. Started even when the ini has it off:
+    # the thread costs nothing while idle, and turning Enabled on is then a
+    # save away rather than a server restart.
+    chat_client.start()
+
     _print_ready()
+
+
+def _watch_settings() -> None:
+    """Rechecks the ini every few seconds, forever, on a daemon thread."""
+    def loop() -> None:
+        while True:
+            time.sleep(5.0)
+            try:
+                settings_file.reload()
+            except Exception:
+                log.exception("settings watch failed")
+
+    threading.Thread(target=loop, name="cft.ini", daemon=True).start()
+
+
+def _report_settings_source() -> None:
+    """Says which ini won, because the copy in the repo is rarely the one."""
+    settings = settings_file.settings
+    if settings_file.path is None:
+        log.warning("No CallFromTwitch.ini found - chat is off and paid events use "
+                    "defaults. Point CFT_INI at the file in GTA V\scripts\.")
+        return
+
+    log.info("settings: %s", settings_file.path)
+    if settings.enabled and settings.channel:
+        log.info("chat: #%s, command %r, cooldown %ds/user",
+                 settings.channel, settings.command, settings.user_cooldown_seconds)
+    elif settings.enabled:
+        log.warning("chat: [Twitch] Channel is empty - write just the channel name; "
+                    "a full https:// link does not survive the ini parser")
+    else:
+        log.info("chat: off ([Twitch] Enabled = false)")
+
+
+def apply_settings(settings) -> None:
+    """
+    Takes a reloaded ini. Called from whichever thread noticed the change.
+
+    Both readers are pointed at the new values, and the chat socket decides
+    for itself whether anything it is bound to actually moved.
+    """
+    global rules
+    rules = rules_from(settings)
+    chat_rules.settings = settings
+    apply_queue_limits(settings)
+    chat_client.settings_changed()
+
+
+def apply_queue_limits(settings) -> None:
+    """
+    Points the call store at the streamer's MaxQueue and MaxAgeSeconds.
+
+    Both used to be enforced in the mod, on a queue that lived there. The queue
+    moved here, so the limits had to follow, or a channel that had asked for
+    three waiting calls would silently hold eight. MaxAgeSeconds of 0 means
+    "keep everything", which the store spells as a non-positive max age.
+    """
+    max_age = float(settings.max_age_seconds) if settings.max_age_seconds > 0 else 0.0
+    store.configure(settings.max_queue, max_age)
 
 
 def _print_ready() -> None:
@@ -208,12 +302,23 @@ def _print_ready() -> None:
 
     voices = rvc.available_voices() if rvc else []
     effects = config.phone_preset if phone else "off"
+    settings = settings_file.settings
+    if settings.enabled and settings.channel:
+        listening = f"#{settings.channel}  ({settings.command})"
+    elif settings.enabled:
+        listening = "no channel set in CallFromTwitch.ini"
+    else:
+        listening = "off"
+
     print()
     print(f"  Listening on  http://{config.host}:{config.port}")
+    print(f"  Twitch chat   {listening}")
     print(f"  Voice         {active_voice}" + (f"   (of {len(voices)} installed)" if len(voices) > 1 else ""))
     print(f"  Phone effect  {effects}")
     print()
-    print("  Ready - start GTA V. Keep this window open; Ctrl+C stops the server.")
+    # Said plainly, because it is the change: chat used to need the game.
+    print("  Ready - chat is being read now; GTA V can start whenever you like.")
+    print("  Keep this window open; Ctrl+C stops the server.")
     print()
 
 
@@ -301,6 +406,7 @@ def warmup() -> None:
 
 @app.get("/health")
 def health() -> dict:
+    """Whether the server is up, and what it is hearing."""
     return {
         "status": "ok",
         "tts": tts is not None,
@@ -308,6 +414,7 @@ def health() -> dict:
         "phone": config.phone_preset if phone else None,
         "voices": rvc.available_voices() if rvc else [],
         "events": hub.sources,
+        "chat": chat_client.stats(),
         **hub.queue.stats(),
         **store.stats(),
     }
@@ -385,33 +492,6 @@ def queue_event(event: events_module.Event) -> None:
         return
 
     store.submit(text, event.user or "Viewer", event.kind)
-
-
-@app.post("/rules")
-def set_rules(request: RulesRequest) -> dict:
-    """
-    Takes the mod's copy of the streamer's filters.
-
-    The thresholds live in CallFromTwitch.ini and always have; before the
-    server did its own filtering the mod applied them after fetching. It still
-    owns them - it just has to say what they are, because the code that acts
-    on them moved here.
-    """
-    global rules
-    rules = calls_module.Rules(
-        allow_points=request.allow_points,
-        allow_donations=request.allow_donations,
-        allow_bits=request.allow_bits,
-        min_donation=request.min_donation,
-        min_bits=request.min_bits,
-        min_length=request.min_length,
-        max_length=request.max_length,
-        default_text=request.default_text or calls_module.Rules.default_text,
-    )
-    log.info("rules from the mod: points=%s donations=%s(>=%g) bits=%s(>=%d) length %d-%d",
-             rules.allow_points, rules.allow_donations, rules.min_donation,
-             rules.allow_bits, rules.min_bits, rules.min_length, rules.max_length)
-    return {"ok": True}
 
 
 def render(text: str, voice: Optional[str] = None,
@@ -502,22 +582,6 @@ def _clean(text: str) -> str:
     if not text:
         raise HTTPException(status_code=400, detail="text is empty")
     return text[: config.max_text_length]
-
-
-@app.post("/submit")
-def submit(request: SubmitRequest) -> dict:
-    """
-    Takes a line off the mod's hands. Answers at once, speaks it later.
-
-    The mod cannot wait for synthesis: the player may pause the game a frame
-    after typing, and then nothing in the script runs until they come back.
-    So the reply says only that the line was accepted, and the audio is
-    collected later from /call - which works no matter how long the menu is up.
-    """
-    call = store.submit(_clean(request.text), request.user or "Viewer", request.kind or "chat")
-    if call is None:
-        raise HTTPException(status_code=429, detail="call queue is full")
-    return {"id": call.id, **store.stats()}
 
 
 @app.get("/call")

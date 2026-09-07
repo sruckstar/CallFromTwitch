@@ -18,11 +18,14 @@ namespace CallFromTwitch
     /// can ring a phone. So a redemption bought while the menu was up is
     /// spoken during the menu, offered on every poll the menu allows (none),
     /// and taken on the first frame after the player comes back.
+    ///
+    /// The same holds for the game not running at all. Chat, points and
+    /// donations reach the server whether or not GTA is open, so a session
+    /// that starts an hour later opens with whatever is still worth ringing.
     /// </summary>
     internal sealed class CallFeed : IDisposable
     {
         private readonly VoiceClient _client;
-        private readonly TwitchConfig _config;
 
         // Wall-clock, not Game.GameTime: the game clock stops with the game,
         // and this schedule has to survive exactly that.
@@ -47,11 +50,10 @@ namespace CallFromTwitch
         private int _consecutiveFailures;
         private bool _everAnswered;
 
-        public CallFeed(TwitchConfig config, VoiceClient client)
+        public CallFeed(ModConfig config, VoiceClient client)
         {
-            _config = config;
             _client = client;
-            _pollInterval = TimeSpan.FromMilliseconds(config.EventPollMilliseconds);
+            _pollInterval = TimeSpan.FromMilliseconds(config.CallPollMilliseconds);
         }
 
         /// <summary>A call whose audio is in hand, waiting to be rung.</summary>
@@ -262,45 +264,6 @@ namespace CallFromTwitch
                 // caught by the acked-id check in CollectPoll.
                 ModLog.Write("ack was not confirmed; the server may offer the call again");
             }
-        }
-
-        /// <summary>
-        /// Pushes the streamer's INI filters up. Called whenever the server
-        /// turns out to be reachable, because a server restarted mid-session
-        /// comes back with its own defaults and no memory of ours.
-        /// </summary>
-        public void SendRules()
-        {
-            string payload = "{"
-                + "\"allow_points\":" + Bool(_config.AllowPoints)
-                + ",\"allow_donations\":" + Bool(_config.AllowDonations)
-                + ",\"allow_bits\":" + Bool(_config.AllowBits)
-                + ",\"min_donation\":" + _config.MinDonation.ToString(Culture)
-                + ",\"min_bits\":" + _config.MinBits.ToString(Culture)
-                + ",\"min_length\":" + _config.MinLength.ToString(Culture)
-                + ",\"max_length\":" + _config.MaxLength.ToString(Culture)
-                + ",\"default_text\":" + VoiceClient.Json(_config.DefaultEventText)
-                + "}";
-
-            try
-            {
-                // Unawaited on purpose: nothing here needs the answer, and the
-                // next reachable server gets the same push anyway.
-                Task ignored = _client.SendRulesAsync(payload, CancellationToken.None);
-                GC.KeepAlive(ignored);
-                ModLog.Write("sent access rules to the server");
-            }
-            catch (Exception)
-            {
-            }
-        }
-
-        private static readonly System.Globalization.CultureInfo Culture =
-            System.Globalization.CultureInfo.InvariantCulture;
-
-        private static string Bool(bool value)
-        {
-            return value ? "true" : "false";
         }
 
         /// <summary>

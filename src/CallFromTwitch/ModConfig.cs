@@ -17,6 +17,21 @@ namespace CallFromTwitch
         public int RingSeconds { get; private set; }
         public int HangUpDelayMs { get; private set; }
 
+        /// <summary>
+        /// How often to ask the server whether a call is ready, in
+        /// milliseconds. This is the only question the mod still asks: who may
+        /// call, and what they may say, is settled on the server.
+        /// </summary>
+        public int CallPollMilliseconds { get; private set; }
+
+        /// <summary>
+        /// Use the viewer's name on the call screen instead of CallerName.
+        /// Off means every call comes from the same contact, which is the
+        /// in-fiction look. Read from [Twitch] because that is where it has
+        /// always been written, and existing INIs must keep working.
+        /// </summary>
+        public bool UseViewerName { get; private set; }
+
         public static ModConfig Load(ScriptSettings settings)
         {
             var config = new ModConfig
@@ -31,7 +46,12 @@ namespace CallFromTwitch
                 CallerIcon = settings.GetValue("Call", "CallerIcon", ContactIcon.Michael),
                 CallDelaySeconds = Clamp(settings.GetValue("Call", "DelaySeconds", 5), 0, 120),
                 RingSeconds = Clamp(settings.GetValue("Call", "RingSeconds", 20), 3, 120),
-                HangUpDelayMs = Clamp(settings.GetValue("Call", "HangUpDelayMs", 1200), 0, 10000)
+                HangUpDelayMs = Clamp(settings.GetValue("Call", "HangUpDelayMs", 1200), 0, 10000),
+                // A viewer who paid notices a delay measured in seconds, and
+                // one request a second costs nothing next to the GPU work.
+                CallPollMilliseconds = Clamp(
+                    settings.GetValue("Twitch", "EventPollMilliseconds", 1000), 250, 30000),
+                UseViewerName = settings.GetValue("Twitch", "UseViewerName", true)
             };
             return config;
         }

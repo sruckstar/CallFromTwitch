@@ -96,10 +96,12 @@ alongside) and the voice is named after its folder.
 ## Running it
 
 ```bat
-cft start        start the server (keep the window open, wait for `Ready - start GTA V`)
+cft start        start the server (keep the window open, wait for `Ready`)
 ```
 
-Then start GTA V and give the mod some text:
+The server reads chat from the moment it starts, so GTA V can be launched
+whenever you like — messages that arrive before it does are spoken and kept
+waiting for the game.
 
 - **from chat:** a viewer types `!call hey, what's up` — needs `[Twitch] Enabled = true`
   and `Channel`

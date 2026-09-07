@@ -107,9 +107,10 @@ so there's no need to change an INI you already have.
 
 ### Why points and donations go through the server
 
-The mod reads the first three ways itself: Twitch puts both the subscriber
-badge and the bits amount right into the message tags, and chat can be read
-anonymously. The other two can't be obtained that way:
+All five are read by the Python server, not by the mod. Chat, subs and bits
+come off the IRC connection — Twitch puts the subscriber badge and the bits
+amount right into the message tags, and chat can be read anonymously, with no
+token at all. The other two can't be obtained that way:
 
 - **Channel points** live only in EventSub, which won't open without an OAuth
   token from **the streamer themself**, with the `channel:read:redemptions`
@@ -121,21 +122,35 @@ Holding two websockets and a JSON parser inside a .NET 4.8 game script means
 extra DLLs in `scripts\` and one more way to crash the game mid-frame. So the
 sockets are held by the Python server, which is running anyway.
 
-The server does the whole pipeline itself, and this is not just tidiness: a
-script gets **no tick at all** while the player sits in the pause menu, so a
-mod that waited for its own synthesis did nothing for as long as the menu was
-up. The server has no such problem. It speaks the line on its own thread and
-then keeps offering the finished call — once a second, forever — until the mod
-answers "got it", which it can only do once the player is back in the game.
+Chat moved there for a different reason, and it is the important one: **the
+game does not have to be running**. While the mod held the IRC socket, closing
+GTA closed the connection, and a viewer who typed `!call` got nothing — not a
+queued call, not an error, just silence. Now the server is listening from the
+moment it starts. Messages arriving with the game shut are filtered, spoken and
+held; the mod finds them waiting whenever it starts.
+
+The same design also survives the pause menu, which is what forced synthesis
+out of the mod in the first place: a script gets **no tick at all** while the
+player sits in a menu. The server has no such problem. It speaks the line on
+its own thread and then keeps offering the finished call — once a second,
+forever — until the mod answers "got it", which it can only do once the player
+is back in the game.
 
 ```
-chat / subs / bits ──IRC──► mod ──POST /submit──┐
-points ──EventSub──────────────────────────────►├─► voice_server (speaks it)
-donations ──DonationAlerts─────────────────────►┘          │
-                                                           ▼
+chat / subs / bits ──IRC───────────────────────┐
+points ──EventSub──────────────────────────────┤─► voice_server (filters, speaks)
+donations ──DonationAlerts─────────────────────┘          │
+                                                          ▼
                      mod ◄──GET /call──── "ready" (repeated until acked)
                       └──POST /call/ack──► call is released
 ```
+
+The mod is only the right-hand side of that picture. It has no Twitch
+connection of its own, applies no rules, and asks exactly one question: is a
+call ready? Everything under `[Twitch]` in `CallFromTwitch.ini` — the channel,
+the command word, who may call, cooldowns, lengths — is read by the server,
+straight out of the same file in `GTA V\scripts\`. Saving an edit applies it
+within a few seconds; neither the game nor the server needs restarting.
 
 ### Setting up points and donations
 

@@ -8,6 +8,12 @@ namespace CallFromTwitch
 {
     /// <summary>
     /// Talks to the local Python voice server (Piper TTS -> RVC).
+    ///
+    /// One direction only, and always the same question: is a call ready, may
+    /// I have its audio, and here is my confirmation. Nothing is sent up any
+    /// more - the server reads chat and CallFromTwitch.ini itself, because
+    /// both have to keep working while the game is closed.
+    ///
     /// Everything here runs off the game thread; the caller polls the Task.
     /// </summary>
     internal sealed class VoiceClient : IDisposable
@@ -28,50 +34,6 @@ namespace CallFromTwitch
                 BaseAddress = baseAddress,
                 Timeout = TimeSpan.FromSeconds(timeoutSeconds)
             };
-        }
-
-        /// <summary>
-        /// Hands a line to the server and returns without waiting for audio.
-        ///
-        /// The mod cannot wait: a player who pauses the game stops every
-        /// script, so a reply that arrives during the menu is a reply nobody
-        /// is left to collect. The server speaks the line on its own thread
-        /// and holds the result until <see cref="AckCallAsync"/> confirms it.
-        /// </summary>
-        public async Task<bool> SubmitAsync(string text, string user, string kind, CancellationToken token)
-        {
-            // Hand-rolled: the payload is three short strings, and a
-            // serializer would mean shipping another DLL alongside the script.
-            string payload = "{\"text\":" + JsonString(text)
-                + ",\"user\":" + JsonString(user ?? string.Empty)
-                + ",\"kind\":" + JsonString(kind ?? "chat") + "}";
-
-            using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
-            using (var response = await _http.PostAsync("submit", content, token).ConfigureAwait(false))
-            {
-                if (!response.IsSuccessStatusCode)
-                {
-                    string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    throw new VoiceServerException(
-                        string.Format("server returned {0}: {1}", (int)response.StatusCode, Trim(body, 200)));
-                }
-
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// Sends the streamer's INI filters up, so the server can decide for
-        /// itself which redemptions become calls. Failure is not fatal: the
-        /// server has defaults, and this is retried whenever it comes back.
-        /// </summary>
-        public async Task<bool> SendRulesAsync(string payload, CancellationToken token)
-        {
-            using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
-            using (var response = await _http.PostAsync("rules", content, token).ConfigureAwait(false))
-            {
-                return response.IsSuccessStatusCode;
-            }
         }
 
         /// <summary>
@@ -151,13 +113,6 @@ namespace CallFromTwitch
             if (string.IsNullOrEmpty(value)) return string.Empty;
             value = value.Replace('\n', ' ').Replace('\r', ' ');
             return value.Length <= max ? value : value.Substring(0, max) + "...";
-        }
-
-        /// <summary>A JSON string literal. Shared with the callers that build
-        /// their own small payloads rather than dragging in a serializer.</summary>
-        public static string Json(string value)
-        {
-            return JsonString(value ?? string.Empty);
         }
 
         private static string JsonString(string value)

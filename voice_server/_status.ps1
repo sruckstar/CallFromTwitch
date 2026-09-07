@@ -97,8 +97,20 @@ if ($gta) {
         $twitchOn = Get-IniValue -File $ini -Section 'Twitch' -Key 'Enabled'
         $channel = Get-IniValue -File $ini -Section 'Twitch' -Key 'Channel'
         if ($twitchOn -match '^\s*true\s*$') {
-            if ($channel) { Line 'Twitch chat' $ok "listening to $channel" }
-            else { Line 'Twitch chat' $bad 'enabled but no channel - run: cft config Channel' }
+            if (-not $channel) {
+                Line 'Twitch chat' $bad 'enabled but no channel - run: cft config Channel'
+            } elseif ($health -and $health.chat -and $health.chat.connected) {
+                # The live answer, which is the only honest one: chat is read
+                # by the server, so a configured channel with the server down
+                # means nobody is listening.
+                $seen = if ($health.chat.messages_seen) { " - $($health.chat.messages_seen) message(s) seen" } else { '' }
+                Line 'Twitch chat' $ok "reading #$($health.chat.channel)$seen"
+            } elseif ($health) {
+                $why = if ($health.chat -and $health.chat.last_error) { " - $($health.chat.last_error)" } else { '' }
+                Line 'Twitch chat' $warn "connecting to #$channel$why"
+            } else {
+                Line 'Twitch chat' $warn "#$channel is configured, but the server reads chat - start it with: cft start"
+            }
         } else {
             Line 'Twitch chat' $idle 'off - enable it with: cft config Enabled'
         }

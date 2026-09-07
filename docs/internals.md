@@ -45,21 +45,17 @@ Both halves are free and work offline.
 ```
 CallFromTwitch/
 ├── src/CallFromTwitch/          # C# mod (SHVDN3)
-│   ├── CallFromTwitchScript.cs  # the tick: submit text, collect ready calls
-│   ├── TwitchIrcClient.cs       # chat connection (IRC/TLS), reconnect
-│   ├── IrcLine.cs               # parsing an IRC line with IRCv3 tags
-│   ├── TwitchSource.cs          # !call, permissions, bits, cooldowns, queue
+│   ├── CallFromTwitchScript.cs  # the tick: collect ready calls and ring them
 │   ├── CallFeed.cs              # collecting spoken calls: /call -> audio -> ack
 │   ├── MiniJson.cs              # JSON parsing without external DLLs
-│   ├── TwitchConfig.cs          # reading the [Twitch] section
-│   ├── IVoiceSource.cs          # shared interface for text sources
-│   ├── VoiceRequest.cs          # a line + its author
 │   ├── IncomingCall.cs          # delay -> call -> answer -> voice line
 │   ├── VoiceClient.cs           # HTTP client for the server
 │   ├── AudioPlayer.cs           # playback through NAudio
 │   └── ModConfig.cs             # reading the INI
 ├── voice_server/                # Python server
-│   ├── server.py                # FastAPI: /submit, /call, /call/ack, /health
+│   ├── server.py                # FastAPI: /call, /call/ack, /health
+│   ├── chat.py                  # Twitch chat (IRC/TLS): !call, bits, cooldowns
+│   ├── mod_ini.py               # reads CallFromTwitch.ini, reloads on save
 │   ├── calls.py                 # synthesis queue; holds calls until acked
 │   ├── events.py                # EventSub (points) and DonationAlerts (donations)
 │   ├── test_events.py           # donation and points emulator

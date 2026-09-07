@@ -40,6 +40,12 @@ else stay where they are.
 
 ### `[Twitch]` — same `CallFromTwitch.ini`
 
+Read by the **voice server**, not by the mod: chat, points and donations all
+arrive there, and they keep arriving with GTA closed. The server reads this
+file straight out of `GTA V\scripts\`, and rereads it a few seconds after you
+save — no restart of either half. (`EventPollMilliseconds` and `UseViewerName`
+are the two the mod still reads for itself.)
+
 | Key | Default | Description |
 |---|---|---|
 | `Enabled` | `false` | read chat; `false` — points and donations only |
@@ -54,7 +60,7 @@ else stay where they are.
 | `AllowPoints` | `false` | for channel points — **needs the event server** |
 | `AllowDonations` | `false` | for a DonationAlerts donation — **needs the event server** |
 | `MinDonation` | `0` | donation threshold; `0` — any amount |
-| `EventPollMilliseconds` | `1000` | how often to ask the server whether a call is ready |
+| `EventPollMilliseconds` | `1000` | how often the **mod** asks whether a call is ready |
 | `DefaultEventText` | `Hey, thanks for the support!` | the line to use when a paid event carries no text |
 | `ModsOnly` | `false` | moderators and the streamer only (narrows `Allow*`) |
 | `SubsOnly` | `false` | subscribers only (narrows `Allow*`) |
@@ -62,7 +68,8 @@ else stay where they are.
 | `GlobalCooldownSeconds` | `0` | shared cooldown for everyone |
 | `MinLength` | `2` | shorter than this is ignored |
 | `MaxLength` | `300` | longer than this is trimmed at a word boundary |
-| `MaxQueue` | `10` | how many lines wait in the queue; extras are dropped |
+| `MaxQueue` | `10` | how many calls wait on the server; extras are dropped |
+| `MaxAgeSeconds` | `300` | a call older than this is thrown away unheard; `0` — keep forever |
 | `UseViewerName` | `true` | viewer's name on the call screen instead of `Call/CallerName` |
 
 ### Server — `CFT_*` environment variables
