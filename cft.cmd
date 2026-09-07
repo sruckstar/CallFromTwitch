@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 REM ===================================================================
 REM  CallFromTwitch - one command for everything.
 REM
