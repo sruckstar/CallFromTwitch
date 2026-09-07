@@ -30,7 +30,6 @@ else stay where they are.
 |---|---|---|
 | `Server/Url` | `http://127.0.0.1:8765` | voice server address |
 | `Server/TimeoutSeconds` | `180` | request timeout; generous enough for a cold server |
-| `Voice/Character` | `trevor` | RVC model name without `.pth` |
 | `Call/CallerName` | `Michael` | name on the call screen |
 | `Call/CallerIcon` | `CHAR_MICHAEL` | contact picture: any `CHAR_*` from the game |
 | `Call/DelaySeconds` | `5` | pause between the voice line being ready and the call |
@@ -55,7 +54,7 @@ else stay where they are.
 | `AllowPoints` | `false` | for channel points — **needs the event server** |
 | `AllowDonations` | `false` | for a DonationAlerts donation — **needs the event server** |
 | `MinDonation` | `0` | donation threshold; `0` — any amount |
-| `EventPollMilliseconds` | `1000` | how often to ask the server about points/donations |
+| `EventPollMilliseconds` | `1000` | how often to ask the server whether a call is ready |
 | `DefaultEventText` | `Hey, thanks for the support!` | the line to use when a paid event carries no text |
 | `ModsOnly` | `false` | moderators and the streamer only (narrows `Allow*`) |
 | `SubsOnly` | `false` | subscribers only (narrows `Allow*`) |

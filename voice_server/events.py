@@ -1,4 +1,4 @@
-"""
+r"""
 Paid Twitch events: channel-point redemptions and money donations.
 
 Neither can be read the way chat is. A redemption arrives only over EventSub,
@@ -79,8 +79,21 @@ class EventQueue:
         self._lock = threading.Lock()
         self._max_size = max_size
         self._dropped = 0
+        # Called with every event as it lands, before it is queued. This is
+        # how a redemption reaches synthesis without waiting for the mod to
+        # ask - the mod cannot ask while the game is paused.
+        self.on_event: Optional[Callable[[Event], None]] = None
 
     def put(self, event: Event) -> None:
+        listener = self.on_event
+        if listener is not None:
+            try:
+                listener(event)
+            except Exception:
+                # A bad listener must not cost us the event itself; the queue
+                # below is still a working record of what arrived.
+                log.exception("event listener failed")
+
         with self._lock:
             # The oldest, not the newest: an event from ten minutes ago has
             # missed its moment, the one that just arrived has not.
@@ -417,6 +430,14 @@ class EventHub:
     @property
     def sources(self) -> list[str]:
         return list(self._started)
+
+    @property
+    def on_event(self) -> Optional[Callable[[Event], None]]:
+        return self.queue.on_event
+
+    @on_event.setter
+    def on_event(self, listener: Optional[Callable[[Event], None]]) -> None:
+        self.queue.on_event = listener
 
     def post_test(self, kind: str, user: str, text: str,
                   amount: float, currency: str, reward: str) -> Event:

@@ -19,7 +19,8 @@
 | Chat lines arrive with a delay | that's by design: a queue, one line at a time |
 | The call screen doesn't show the viewer's name | `UseViewerName = false` in `[Twitch]` |
 | Points/donations don't trigger anything | `events` is empty in `/health` — `events.env` isn't filled in, or `CFT_EVENTS=0` |
-| `the voice server has no /events route` | the server is an old build; update the `voice_server\` folder |
+| `the voice server has no /call route` | the server is an old build; update the `voice_server\` folder |
+| Nothing happens while the game is paused | it should: synthesis runs on the server, and the call is handed over on the first frame after you unpause. If it doesn't, the server is an old build |
 | The reward fired but no call came | `AllowPoints` is off, or the reward name doesn't match `CFT_POINTS_REWARD` |
 | Every reward triggers a call | `CFT_POINTS_REWARD` is empty — write in the exact name of your reward |
 | `EventSub: subscription revoked` | the streamer token expired (lives ~60 days) — get a new one |

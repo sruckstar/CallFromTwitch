@@ -1,10 +1,19 @@
 """
 CallFromTwitch voice server.
 
-POST /speak {"text": "...", "voice": "trevor"} -> audio/wav
-
-Piper TTS renders neutral speech, RVC converts the timbre to the requested
+Piper TTS renders neutral speech, RVC converts the timbre to the chosen
 character, and a telephone filter colours the result. Models stay resident.
+
+The mod does not synthesise anything itself and does not wait on a response,
+because a paused game runs no script code at all - see calls.py. It posts text
+to /submit, and asks /call whether something is ready; the audio it takes is
+kept here until /call/ack says it arrived.
+
+  POST /submit    {"text": "...", "user": "..."} -> queued for synthesis
+  GET  /call                                     -> the ready call, or none
+  GET  /call/<id>/audio                          -> its WAV bytes
+  POST /call/ack  {"id": "c7"}                   -> the game has it; drop it
+  POST /speak     {"text": "..."}                -> audio/wav, synchronous
 """
 from __future__ import annotations
 
@@ -19,6 +28,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import calls as calls_module
 import events as events_module
 import phone_fx
 from config import Config
@@ -44,10 +54,18 @@ if config.quiet:
 tts: Optional[TTSEngine] = None
 rvc: Optional[RVCEngine] = None
 phone: Optional[phone_fx.PhoneFX] = None
-# Used when a request names no voice, or one that is not installed.
+# The voice every call is spoken in, settled once at startup.
 active_voice: str = config.default_voice
 # Always present; it simply starts nothing when unconfigured.
 hub: events_module.EventHub = events_module.EventHub(config)
+# Spoken calls waiting for a game that may be sitting in its pause menu.
+store: calls_module.CallStore = calls_module.CallStore(
+    max_pending=config.call_max_pending, max_age=config.call_max_age
+)
+worker: Optional[calls_module.CallWorker] = None
+# Which paid events become calls. Replaced by whatever the mod sends to
+# /rules, so CallFromTwitch.ini stays the one place these are edited.
+rules: calls_module.Rules = calls_module.Rules()
 
 
 def set_window_title(text: str) -> None:
@@ -64,7 +82,37 @@ def set_window_title(text: str) -> None:
 
 class SpeakRequest(BaseModel):
     text: str = Field(..., min_length=1)
+    # The mod never sends this: the voice is chosen when the server starts, and
+    # a name coming in per request used to override that choice silently.
+    # Kept for test_client.py, which needs to audition one model on purpose.
     voice: Optional[str] = None
+
+
+class SubmitRequest(BaseModel):
+    """A line the mod wants spoken, handed over without waiting for it."""
+
+    text: str = Field(..., min_length=1)
+    user: str = ""
+    kind: str = "chat"
+
+
+class RulesRequest(BaseModel):
+    """The mod's INI filters, pushed up so the server can apply them itself."""
+
+    allow_points: bool = True
+    allow_donations: bool = True
+    allow_bits: bool = True
+    min_donation: float = 0.0
+    min_bits: int = 1
+    min_length: int = 2
+    max_length: int = 300
+    default_text: str = ""
+
+
+class AckRequest(BaseModel):
+    """The game confirming it has the audio for one call."""
+
+    id: str = Field(..., min_length=1)
 
 
 class TestEvent(BaseModel):
@@ -138,6 +186,15 @@ def startup() -> None:
 
     hub.start()
 
+    global worker
+    worker = calls_module.CallWorker(store, render)
+    worker.start()
+
+    # Paid events no longer wait for the mod to come and get them: the game
+    # may be paused, and then nobody would come for minutes. They are turned
+    # into calls here, the moment the socket delivers them.
+    hub.on_event = queue_event
+
     _print_ready()
 
 
@@ -162,11 +219,12 @@ def _print_ready() -> None:
 
 def select_voice(voices: list[str]) -> None:
     """
-    Ask which of several installed voices this run should default to.
+    Ask which of the installed voices this run speaks in.
 
-    Only decides the fallback for a request naming a voice that is not
-    installed. Skipped when there is one voice, when CFT_VOICE_PROMPT is off,
-    or when there is no console to answer on, so unattended starts never hang.
+    The answer settles the voice for the whole run: it is what warmup loads
+    and what every call is spoken in. Skipped when there is one voice, when
+    CFT_VOICE_PROMPT is off, or when there is no console to answer on, so
+    unattended starts never hang - those fall back to CFT_DEFAULT_VOICE.
     """
     global active_voice
 
@@ -251,6 +309,7 @@ def health() -> dict:
         "voices": rvc.available_voices() if rvc else [],
         "events": hub.sources,
         **hub.queue.stats(),
+        **store.stats(),
     }
 
 
@@ -288,6 +347,8 @@ def test_event(request: TestEvent) -> dict:
 def voices() -> dict:
     return {
         "voices": rvc.available_voices() if rvc else [],
+        "active": active_voice,
+        # Old name for the same thing, kept so an existing caller still reads it.
         "default": active_voice,
     }
 
@@ -306,52 +367,106 @@ def _log_received(text: str, voice: str) -> None:
         log.info("received %r voice=%s", text[:60], voice)
 
 
-@app.post("/speak")
-def speak(request: SpeakRequest) -> Response:
+def queue_event(event: events_module.Event) -> None:
+    """
+    Turns a redemption or donation into a call, or drops it.
+
+    Called on the socket thread the moment the event lands, rather than when
+    the mod next asks. That is the whole point of the redesign: synthesis for
+    a call bought during a pause menu runs while the menu is still up, so the
+    audio is already finished when the player comes back.
+    """
+    if not rules.accepts(event.kind, event.amount):
+        log.info("ignored %s from %s: the ini does not allow it", event.kind, event.user)
+        return
+
+    text = rules.text_for(event.text)
+    if text is None:
+        return
+
+    store.submit(text, event.user or "Viewer", event.kind)
+
+
+@app.post("/rules")
+def set_rules(request: RulesRequest) -> dict:
+    """
+    Takes the mod's copy of the streamer's filters.
+
+    The thresholds live in CallFromTwitch.ini and always have; before the
+    server did its own filtering the mod applied them after fetching. It still
+    owns them - it just has to say what they are, because the code that acts
+    on them moved here.
+    """
+    global rules
+    rules = calls_module.Rules(
+        allow_points=request.allow_points,
+        allow_donations=request.allow_donations,
+        allow_bits=request.allow_bits,
+        min_donation=request.min_donation,
+        min_bits=request.min_bits,
+        min_length=request.min_length,
+        max_length=request.max_length,
+        default_text=request.default_text or calls_module.Rules.default_text,
+    )
+    log.info("rules from the mod: points=%s donations=%s(>=%g) bits=%s(>=%d) length %d-%d",
+             rules.allow_points, rules.allow_donations, rules.min_donation,
+             rules.allow_bits, rules.min_bits, rules.min_length, rules.max_length)
+    return {"ok": True}
+
+
+def render(text: str, voice: Optional[str] = None,
+           stats: Optional[dict] = None) -> "tuple[bytes, str]":
+    """
+    Text in, finished telephone audio out. The whole pipeline, in one place.
+
+    Called from two directions: the worker thread draining the call store, and
+    the synchronous /speak route. Neither touches the stages directly, so a
+    call the game takes and a line auditioned by test_client.py sound alike.
+
+    A stage that fails is skipped rather than fatal - a dry voice reaches the
+    player, an exception reaches nobody.
+
+    Pass a dict as stats to be told how long each stage took; /speak turns
+    that into the headers test_client.py prints. The worker does not care,
+    and a shared attribute would be a race between the two callers.
+    """
     if tts is None:
-        raise HTTPException(status_code=503, detail="TTS engine not ready")
+        raise RuntimeError("TTS engine not ready")
 
-    text = request.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text is empty")
-    if len(text) > config.max_text_length:
-        text = text[: config.max_text_length]
-
-    voice = (request.voice or active_voice).strip()
+    # Normally the voice picked at startup. A caller may still name one -
+    # test_client.py auditions a single model that way - but the mod does not,
+    # so what the console reported at startup is what the player hears.
+    chosen = (voice or active_voice).strip()
     if rvc is not None:
-        # The character's own name, even when the ini asked for a file name.
-        named = rvc.canonical(voice)
+        # The character's own name, even when a .pth file name was asked for.
+        named = rvc.canonical(chosen)
         if named is None:
-            if voice != active_voice:
-                log.info("No RVC model '%s'; using '%s'", voice, active_voice)
-            voice = active_voice
+            if chosen != active_voice:
+                log.info("No RVC model %r; using %r", chosen, active_voice)
+            chosen = active_voice
         else:
-            voice = named
+            chosen = named
 
-    # Before synthesis, not after: the "spoke ..." line below can be a minute
-    # away, and until then a hung request looks like one that never arrived.
-    _log_received(text, voice)
+    # Before synthesis, not after: the timing line below can be a minute away,
+    # and until then a hung request looks like one that never arrived.
+    _log_received(text, chosen)
 
     started = time.perf_counter()
-    try:
-        audio = tts.synthesize(text)
-    except Exception as exc:
-        log.exception("TTS failed")
-        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}") from exc
+    audio = tts.synthesize(text)
     tts_ms = (time.perf_counter() - started) * 1000
 
     rvc_ms = 0.0
     converted = False
-    if rvc is not None and rvc.has_voice(voice):
+    if rvc is not None and rvc.has_voice(chosen):
         rvc_started = time.perf_counter()
         try:
-            audio = rvc.convert(audio, voice)
+            audio = rvc.convert(audio, chosen)
             converted = True
         except Exception:
             log.exception("RVC failed, serving raw TTS")
         rvc_ms = (time.perf_counter() - rvc_started) * 1000
     elif rvc is not None:
-        log.warning("No RVC model for voice '%s'; serving raw TTS", voice)
+        log.warning("No RVC model for voice %r; serving raw TTS", chosen)
 
     fx_ms = 0.0
     if phone is not None:
@@ -365,22 +480,122 @@ def speak(request: SpeakRequest) -> Response:
     if config.quiet:
         total_s = (tts_ms + rvc_ms + fx_ms) / 1000
         spoken = text if len(text) <= 60 else text[:57] + "..."
-        print(f"  [{time.strftime('%H:%M:%S')}] {voice}: {spoken}  ({total_s:.1f}s)", flush=True)
+        print(f"  [{time.strftime('%H:%M:%S')}] {chosen}: {spoken}  ({total_s:.1f}s)", flush=True)
     else:
         log.info(
             "spoke %r voice=%s tts=%.0fms rvc=%.0fms fx=%.0fms converted=%s",
-            text[:60], voice, tts_ms, rvc_ms, fx_ms, converted,
+            text[:60], chosen, tts_ms, rvc_ms, fx_ms, converted,
         )
+
+    if stats is not None:
+        stats.update({
+            "converted": str(converted).lower(),
+            "tts_ms": f"{tts_ms:.0f}",
+            "rvc_ms": f"{rvc_ms:.0f}",
+            "fx_ms": f"{fx_ms:.0f}",
+        })
+    return audio, chosen
+
+
+def _clean(text: str) -> str:
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is empty")
+    return text[: config.max_text_length]
+
+
+@app.post("/submit")
+def submit(request: SubmitRequest) -> dict:
+    """
+    Takes a line off the mod's hands. Answers at once, speaks it later.
+
+    The mod cannot wait for synthesis: the player may pause the game a frame
+    after typing, and then nothing in the script runs until they come back.
+    So the reply says only that the line was accepted, and the audio is
+    collected later from /call - which works no matter how long the menu is up.
+    """
+    call = store.submit(_clean(request.text), request.user or "Viewer", request.kind or "chat")
+    if call is None:
+        raise HTTPException(status_code=429, detail="call queue is full")
+    return {"id": call.id, **store.stats()}
+
+
+@app.get("/call")
+def next_call() -> dict:
+    """
+    The call the game should be ringing right now, if there is one.
+
+    Deliberately not draining. The same call is handed out on every poll until
+    /call/ack confirms it landed, because between this answer and that ack the
+    game can pause, crash or reload a script, and a paid call lost in that gap
+    is one the viewer never hears.
+    """
+    call = store.peek()
+    if call is None:
+        return {"call": None, **store.stats()}
+    return {"call": call.as_dict(), **store.stats()}
+
+
+@app.get("/call/{call_id}/audio")
+def call_audio(call_id: str) -> Response:
+    """The WAV for a ready call. Still not a hand-off; only /call/ack is."""
+    call = store.peek()
+    if call is None or call.id != call_id:
+        raise HTTPException(status_code=404, detail=f"no ready call {call_id}")
+
+    return Response(
+        content=call.audio,
+        media_type="audio/wav",
+        headers={
+            "X-Call-Id": call.id,
+            "X-Voice": call.voice,
+            "X-User": call.user,
+        },
+    )
+
+
+@app.post("/call/ack")
+def call_ack(request: AckRequest) -> dict:
+    """
+    The game has the audio; stop offering this call.
+
+    A false "known" is the normal answer to a retry the mod sent after we had
+    already dropped the call, so it is reported rather than refused.
+    """
+    known = store.ack(request.id)
+    return {"acked": known, **store.stats()}
+
+
+@app.post("/speak")
+def speak(request: SpeakRequest) -> Response:
+    """
+    Synthesis with the answer in the response, for test_client.py.
+
+    The mod used this until pausing the game proved it could not: a script
+    that is not ticking cannot collect a reply. It stays because auditioning a
+    voice from the command line wants exactly this shape.
+    """
+    if tts is None:
+        raise HTTPException(status_code=503, detail="TTS engine not ready")
+
+    stats: dict = {}
+    try:
+        audio, voice = render(_clean(request.text), request.voice, stats)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("synthesis failed")
+        raise HTTPException(status_code=500, detail=f"synthesis failed: {exc}") from exc
 
     return Response(
         content=audio,
         media_type="audio/wav",
         headers={
             "X-Voice": voice,
-            "X-Converted": str(converted).lower(),
-            "X-TTS-Ms": f"{tts_ms:.0f}",
-            "X-RVC-Ms": f"{rvc_ms:.0f}",
-            "X-FX-Ms": f"{fx_ms:.0f}",
+            "X-Converted": stats.get("converted", "false"),
+            "X-TTS-Ms": stats.get("tts_ms", "0"),
+            "X-RVC-Ms": stats.get("rvc_ms", "0"),
+            "X-FX-Ms": stats.get("fx_ms", "0"),
             "X-Phone": config.phone_preset if phone else "off",
         },
     )

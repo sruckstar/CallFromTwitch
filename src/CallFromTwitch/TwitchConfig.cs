@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using GTA;
 
 namespace CallFromTwitch
@@ -57,7 +57,12 @@ namespace CallFromTwitch
         /// <summary>Donations below this are ignored, in whatever currency the service reports.</summary>
         public double MinDonation { get; private set; }
 
-        /// <summary>How often to ask the server for new paid events, in milliseconds.</summary>
+        /// <summary>
+        /// How often to ask the server whether a call is ready, in
+        /// milliseconds. It used to time the fetch of paid events; those now
+        /// reach the server directly, and this paces the one question the mod
+        /// still asks.
+        /// </summary>
         public int EventPollMilliseconds { get; private set; }
 
         /// <summary>
@@ -164,12 +169,6 @@ namespace CallFromTwitch
             // Otherwise everything off leaves a client that connects, joins,
             // reads every message and answers none of them.
             AllowChat = true;
-        }
-
-        /// <summary>True when any path needs the voice server's event feed.</summary>
-        public bool NeedsEventFeed
-        {
-            get { return AllowPoints || AllowDonations; }
         }
 
         /// <summary>

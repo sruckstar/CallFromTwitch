@@ -30,15 +30,79 @@ namespace CallFromTwitch
             };
         }
 
-        /// <summary>Returns raw WAV bytes for <paramref name="text"/> in the given character voice.</summary>
-        public async Task<byte[]> SynthesizeAsync(string text, string voice, CancellationToken token)
+        /// <summary>
+        /// Hands a line to the server and returns without waiting for audio.
+        ///
+        /// The mod cannot wait: a player who pauses the game stops every
+        /// script, so a reply that arrives during the menu is a reply nobody
+        /// is left to collect. The server speaks the line on its own thread
+        /// and holds the result until <see cref="AckCallAsync"/> confirms it.
+        /// </summary>
+        public async Task<bool> SubmitAsync(string text, string user, string kind, CancellationToken token)
         {
-            // Hand-rolled: the payload is two short strings, and a serializer
-            // would mean shipping another DLL alongside the script.
-            string payload = "{\"text\":" + JsonString(text) + ",\"voice\":" + JsonString(voice) + "}";
+            // Hand-rolled: the payload is three short strings, and a
+            // serializer would mean shipping another DLL alongside the script.
+            string payload = "{\"text\":" + JsonString(text)
+                + ",\"user\":" + JsonString(user ?? string.Empty)
+                + ",\"kind\":" + JsonString(kind ?? "chat") + "}";
 
             using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
-            using (var response = await _http.PostAsync("speak", content, token).ConfigureAwait(false))
+            using (var response = await _http.PostAsync("submit", content, token).ConfigureAwait(false))
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    throw new VoiceServerException(
+                        string.Format("server returned {0}: {1}", (int)response.StatusCode, Trim(body, 200)));
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Sends the streamer's INI filters up, so the server can decide for
+        /// itself which redemptions become calls. Failure is not fatal: the
+        /// server has defaults, and this is retried whenever it comes back.
+        /// </summary>
+        public async Task<bool> SendRulesAsync(string payload, CancellationToken token)
+        {
+            using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
+            using (var response = await _http.PostAsync("rules", content, token).ConfigureAwait(false))
+            {
+                return response.IsSuccessStatusCode;
+            }
+        }
+
+        /// <summary>
+        /// Asks whether a spoken call is waiting, as raw JSON - parsing
+        /// belongs next to the type that knows the shape.
+        ///
+        /// The timeout is short on purpose: this repeats every second, and one
+        /// request that hung for the synthesis timeout would stack up behind
+        /// itself.
+        /// </summary>
+        public async Task<string> FetchCallAsync(CancellationToken token)
+        {
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token))
+            using (var response = await _http.GetAsync("call", linked.Token).ConfigureAwait(false))
+            {
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Downloads the audio for one ready call. The server still holds it
+        /// afterwards - only the ack releases it.
+        /// </summary>
+        public async Task<byte[]> FetchCallAudioAsync(string callId, CancellationToken token)
+        {
+            using (var response = await _http.GetAsync("call/" + Uri.EscapeDataString(callId) + "/audio", token)
+                .ConfigureAwait(false))
             {
                 if (!response.IsSuccessStatusCode)
                 {
@@ -52,23 +116,17 @@ namespace CallFromTwitch
         }
 
         /// <summary>
-        /// Fetches the paid events (channel points, donations) the server has
-        /// collected since the last call, as raw JSON - parsing belongs next to
-        /// the type that knows the shape.
-        ///
-        /// The timeout is short on purpose: the request repeats every second,
-        /// so one that hung for the synthesis timeout would stack up.
+        /// Tells the server the audio arrived, which is the only thing that
+        /// makes it stop offering this call.
         /// </summary>
-        public async Task<string> FetchEventsAsync(int limit, CancellationToken token)
+        public async Task<bool> AckCallAsync(string callId, CancellationToken token)
         {
-            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
-            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token))
-            using (var response = await _http.GetAsync("events?limit=" + limit, linked.Token).ConfigureAwait(false))
-            {
-                if (!response.IsSuccessStatusCode)
-                    return null;
+            string payload = "{\"id\":" + JsonString(callId) + "}";
 
-                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
+            using (var response = await _http.PostAsync("call/ack", content, token).ConfigureAwait(false))
+            {
+                return response.IsSuccessStatusCode;
             }
         }
 
@@ -93,6 +151,13 @@ namespace CallFromTwitch
             if (string.IsNullOrEmpty(value)) return string.Empty;
             value = value.Replace('\n', ' ').Replace('\r', ' ');
             return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+
+        /// <summary>A JSON string literal. Shared with the callers that build
+        /// their own small payloads rather than dragging in a serializer.</summary>
+        public static string Json(string value)
+        {
+            return JsonString(value ?? string.Empty);
         }
 
         private static string JsonString(string value)

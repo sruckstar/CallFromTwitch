@@ -8,7 +8,6 @@ namespace CallFromTwitch
     internal sealed class ModConfig
     {
         public string ServerUrl { get; private set; }
-        public string Voice { get; private set; }
         public float Volume { get; private set; }
         public int TimeoutSeconds { get; private set; }
         public bool ShowSubtitle { get; private set; }
@@ -23,7 +22,6 @@ namespace CallFromTwitch
             var config = new ModConfig
             {
                 ServerUrl = LoadServerUrl(settings),
-                Voice = settings.GetValue("Voice", "Character", "trevor"),
                 Volume = Clamp(settings.GetValue("Audio", "Volume", 1.0f), 0f, 1f),
                 TimeoutSeconds = Clamp(settings.GetValue("Server", "TimeoutSeconds", 180), 5, 600),
                 ShowSubtitle = settings.GetValue("Audio", "ShowSubtitle", true),

@@ -23,19 +23,23 @@ namespace CallFromTwitch
         private readonly IncomingCall _call;
 
         private readonly TwitchSource _twitch;   // null when [Twitch] Enabled = false
-        // Channel points and donations, relayed by the voice server. Null
-        // unless one of those paths is switched on.
-        private readonly EventSource _events;
+        // Calls the server has already spoken, waiting to be collected. Every
+        // call arrives this way now - chat, points and donations alike.
+        private readonly CallFeed _feed;
 
-        private Task<byte[]> _pending;
-        private CancellationTokenSource _pendingCancel;
-        private VoiceRequest _pendingRequest;
+        // Lines handed to the server, not yet acknowledged by it. Only the
+        // hand-off is tracked; the audio comes back through _feed.
+        private Task<bool> _submit;
+        private CancellationTokenSource _submitCancel;
+        private VoiceRequest _submitRequest;
 
         // Polled until it answers, not checked once: the game is usually
         // launched before the server, and a single startup check would call it
         // dead for the whole session.
         private Task<bool> _healthCheck;
         private bool _offlineReported;
+        // Whether the server we are currently talking to has our access rules.
+        private bool _rulesSent;
 
         // Wall-clock: the retry has to keep running while the game sits paused
         // in a menu, which is when someone alt-tabs out to start the server.
@@ -51,8 +55,8 @@ namespace CallFromTwitch
 
             // The settings as the mod actually read them: the INI beside the
             // DLL is not the one in the repository, and only this says which won.
-            ModLog.Write("server = {0}, timeout {1}s, voice = {2}",
-                _config.ServerUrl, _config.TimeoutSeconds, _config.Voice);
+            ModLog.Write("server = {0}, timeout {1}s (voice is the server's own choice)",
+                _config.ServerUrl, _config.TimeoutSeconds);
             ModLog.Write("twitch: Enabled={0} Channel=\"{1}\" Command=\"{2}\" anonymous={3}",
                 _twitchConfig.Enabled, _twitchConfig.Channel, _twitchConfig.Command,
                 _twitchConfig.Token.Length == 0);
@@ -68,16 +72,14 @@ namespace CallFromTwitch
             _call = new IncomingCall(_config, _player);
 
             _twitch = CreateTwitchSource();
-            _events = _twitchConfig.Enabled && _twitchConfig.NeedsEventFeed
-                ? new EventSource(_twitchConfig, _client)
-                : null;
+            // Always on: it is how every call comes back, not just paid ones.
+            _feed = new CallFeed(_twitchConfig, _client);
 
             Tick += OnTick;
             Aborted += OnAborted;
 
-            ModLog.Write("started; sources: twitch={0}, events={1}",
-                _twitch != null ? _twitch.Description : "off",
-                _events != null ? "on" : "off");
+            ModLog.Write("started; chat={0}, calls collected from the server",
+                _twitch != null ? _twitch.Description : "off");
         }
 
         /// <summary>
@@ -125,37 +127,38 @@ namespace CallFromTwitch
             // a frame even when nothing is queued.
             _call.Update();
 
+            CollectFinishedSubmit();
             PollSources();
-            CollectFinishedRequest();
+            CollectReadyCall();
         }
 
         /// <summary>
-        /// Picks up the next line, paid calls first. Skipped while a request or
-        /// a call is in flight; the queues keep their contents meanwhile.
+        /// Hands the next chat line to the server, paid lines needing nothing
+        /// from us - the server hears those on its own sockets and starts
+        /// speaking them without being asked.
+        ///
+        /// Unlike the call itself, this is not held back while a call is up:
+        /// getting the text to the server early is the whole point, so that
+        /// synthesis has already happened by the time the phone is free.
         /// </summary>
         private void PollSources()
         {
-            if (_twitch != null)
-                _twitch.Update(Game.GameTime);
+            if (_twitch == null)
+                return;
 
-            // Outside the CanAcceptLine guard: this fetch is what drains the
-            // server's queue, which would otherwise age out while a call is up.
-            if (_events != null)
-                _events.Update(Game.GameTime);
+            _twitch.Update(Game.GameTime);
 
-            if (!CanAcceptLine())
+            if (_submit != null)
             {
-                LogBlocked(_pending != null
-                    ? "a voice request is still in flight"
-                    : "a call is in progress");
+                LogBlocked("a line is still being handed over");
                 return;
             }
 
             // Nothing is taken out of a queue we cannot serve. A request aimed
             // at a port nobody is listening on does not fail fast - it sits in
             // HttpClient for the whole TimeoutSeconds and blocks every later
-            // line for that long. The queues keep their contents, and the
-            // health poll gets them moving again within five seconds.
+            // line for that long. The queue keeps its contents, and the health
+            // poll gets them moving again within five seconds.
             if (_offlineReported)
             {
                 LogBlocked("the voice server is not reachable");
@@ -164,30 +167,47 @@ namespace CallFromTwitch
 
             LogBlocked(null);
 
-            // Paid calls first, then chat.
-            VoiceRequest request = _events != null ? _events.TryTake(Game.GameTime) : null;
-            if (request == null && _twitch != null)
-                request = _twitch.TryTake(Game.GameTime);
-
+            VoiceRequest request = _twitch.TryTake(Game.GameTime);
             if (request != null)
-                Send(request);
+                Submit(request);
         }
 
-        private void CollectFinishedRequest()
+        /// <summary>
+        /// Takes a spoken call from the feed and rings it.
+        ///
+        /// This is the only place the game is allowed to be busy: the audio is
+        /// already made, so waiting costs the viewer nothing, and the server
+        /// keeps the call until we say we have it.
+        /// </summary>
+        private void CollectReadyCall()
         {
-            if (_pending == null || !_pending.IsCompleted)
+            _feed.Update();
+
+            if (_call.IsBusy)
                 return;
 
-            Task<byte[]> finished = _pending;
-            VoiceRequest request = _pendingRequest;
-            bool cancelledByUser = _pendingCancel != null && _pendingCancel.IsCancellationRequested;
-            _pending = null;
-            _pendingRequest = null;
-            DisposePendingCancel();
+            byte[] audio;
+            string text;
+            string user;
+            if (!_feed.TryTake(out audio, out text, out user))
+                return;
 
-            // A cancelled task is the HttpClient timeout: nothing else trips
-            // our own token any more. The timeout lands in IsCanceled or
-            // IsFaulted depending on the runtime, so both are checked.
+            ModLog.Write("ringing: {0} bytes", audio.Length);
+            _call.Enqueue(audio, text, CallerNameFor(user));
+        }
+
+        private void CollectFinishedSubmit()
+        {
+            if (_submit == null || !_submit.IsCompleted)
+                return;
+
+            Task<bool> finished = _submit;
+            VoiceRequest request = _submitRequest;
+            bool cancelledByUser = _submitCancel != null && _submitCancel.IsCancellationRequested;
+            _submit = null;
+            _submitRequest = null;
+            DisposeSubmitCancel();
+
             if (finished.IsCanceled)
             {
                 if (!cancelledByUser)
@@ -204,24 +224,23 @@ namespace CallFromTwitch
                     ShowTimeout();
                 else
                 {
-                    ModLog.Error("voice request", finished.Exception);
+                    ModLog.Error("handing a line to the server", finished.Exception);
                     ShowError(Flatten(finished.Exception));
                 }
                 return;
             }
 
-            ModLog.Write("server returned {0} bytes; ringing", finished.Result.Length);
-            _call.Enqueue(finished.Result, request.Text, CallerNameFor(request));
+            ModLog.Write("server accepted: {0}", request.Text);
         }
 
         /// <summary>
         /// Who the call screen says is calling. A viewer's name only wins when
         /// the streamer asked for it, so calls otherwise share one contact.
         /// </summary>
-        private string CallerNameFor(VoiceRequest request)
+        private string CallerNameFor(string author)
         {
-            if (_twitchConfig.UseViewerName && !string.IsNullOrEmpty(request.Author))
-                return request.Author;
+            if (_twitchConfig.UseViewerName && !string.IsNullOrEmpty(author))
+                return author;
 
             return _config.CallerName;
         }
@@ -251,19 +270,16 @@ namespace CallFromTwitch
                 ModLog.Write("no longer blocked; taking queued lines again");
         }
 
-        private bool CanAcceptLine()
+        private void Submit(VoiceRequest request)
         {
-            return _pending == null && !_call.IsBusy;
-        }
-
-        private void Send(VoiceRequest request)
-        {
-            _pendingRequest = request;
-            _pendingCancel = new CancellationTokenSource();
+            _submitRequest = request;
+            _submitCancel = new CancellationTokenSource();
             // Unawaited: OnTick polls the task, so the game thread is never
-            // blocked on the network round-trip.
-            ModLog.Write("sending to server (voice {0}): {1}", _config.Voice, request.Text);
-            _pending = _client.SynthesizeAsync(request.Text, _config.Voice, _pendingCancel.Token);
+            // blocked on the network round-trip. The reply says only that the
+            // line was accepted - the audio comes back through the feed, which
+            // is what lets synthesis finish while the game is paused.
+            ModLog.Write("handing to server: {0}", request.Text);
+            _submit = _client.SubmitAsync(request.Text, request.Author, "chat", _submitCancel.Token);
         }
 
         /// <summary>
@@ -318,9 +334,22 @@ namespace CallFromTwitch
                     Notification.Show("~p~CallFromTwitch:~w~ voice server connected.");
                 }
 
+                // On every first sighting, not just the first of the session:
+                // a server restarted mid-stream comes back with its own
+                // defaults and no memory of the streamer's ini.
+                if (!_rulesSent)
+                {
+                    _feed.SendRules();
+                    _rulesSent = true;
+                }
+
                 _offlineReported = false;
                 return;
             }
+
+            // The next server we reach has to be told the rules again; it may
+            // not be the same process we were talking to.
+            _rulesSent = false;
 
             // Once per outage, not once every five seconds: an unstarted
             // server would otherwise bury the screen in banners.
@@ -356,12 +385,9 @@ namespace CallFromTwitch
                 }
             }
 
-            if (_events != null)
-            {
-                string status = _events.TakeStatus(out isError);
-                if (status != null)
-                    ShowError(status);
-            }
+            string feedStatus = _feed.TakeStatus();
+            if (feedStatus != null)
+                ShowError(feedStatus);
 
             ReportDroppedLines();
         }
@@ -376,31 +402,26 @@ namespace CallFromTwitch
         private void ReportDroppedLines()
         {
             int chatDropped = _twitch != null ? _twitch.TakeDroppedCount() : 0;
-            int paidDropped = _events != null ? _events.TakeDroppedCount() : 0;
-
-            if (paidDropped > 0)
-                ShowError(string.Format(
-                    "~y~{0}~w~ paid call(s) waited too long and were skipped.", paidDropped));
 
             if (chatDropped > 0)
                 Notification.Show(string.Format(
                     "~p~CallFromTwitch:~w~ skipped ~y~{0}~w~ stale chat line(s).", chatDropped));
         }
 
-        private void CancelPending()
+        private void CancelSubmit()
         {
-            if (_pendingCancel != null)
+            if (_submitCancel != null)
             {
-                try { _pendingCancel.Cancel(); } catch { }
+                try { _submitCancel.Cancel(); } catch { }
             }
         }
 
-        private void DisposePendingCancel()
+        private void DisposeSubmitCancel()
         {
-            if (_pendingCancel != null)
+            if (_submitCancel != null)
             {
-                try { _pendingCancel.Dispose(); } catch { }
-                _pendingCancel = null;
+                try { _submitCancel.Dispose(); } catch { }
+                _submitCancel = null;
             }
         }
 
@@ -441,15 +462,14 @@ namespace CallFromTwitch
             // the player, so the log has to record that the mod stopped.
             ModLog.Write("script aborted; shutting down");
 
-            CancelPending();
-            DisposePendingCancel();
+            CancelSubmit();
+            DisposeSubmitCancel();
 
             // The socket thread first: it is the only piece that outlives the
             // script, and must not read into a half-torn-down object graph.
             if (_twitch != null)
                 _twitch.Dispose();
-            if (_events != null)
-                _events.Dispose();
+            _feed.Dispose();
 
             // Frees the caller's char-sheet slot, which would otherwise leak
             // into the phonebook pool for the rest of the session.

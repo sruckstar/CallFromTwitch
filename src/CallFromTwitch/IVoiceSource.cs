@@ -4,9 +4,12 @@ namespace CallFromTwitch
 
 {
     /// <summary>
-    /// Where lines come from. The Twitch chat client and the paid event feed
-    /// are both one of these, so the rest of the mod never learns whether a
-    /// line was shouted in chat or paid for with points.
+    /// Where lines the mod itself collects come from - chat, today, and
+    /// whatever else arrives on a socket the mod holds.
+    ///
+    /// Paid events are not one of these any more. They reach the voice server
+    /// directly, because a line that only the mod knows about cannot be
+    /// spoken while the game is paused and the mod is not running.
     ///
     /// Polled from the game thread once per tick and must never block it:
     /// anything that waits on the network does so on a thread of its own and

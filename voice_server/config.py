@@ -149,6 +149,16 @@ class Config:
     # Accept POST /events/test.
     events_test: bool = field(default_factory=lambda: _env_bool("CFT_EVENTS_TEST", True))
 
+    # ---- Calls spoken here and held for the game. See calls.py.
+    # Lines queued for synthesis plus lines spoken and not yet collected.
+    # Small on purpose: a backlog the player has to sit through is worse than
+    # a line that never arrives.
+    call_max_pending: int = field(default_factory=lambda: _env_int("CFT_CALL_QUEUE", 8))
+    # Seconds a call may wait for the game before it is thrown away. Long,
+    # because a pause menu is a legitimate reason to hold one, but finite:
+    # a server left running overnight must not open with yesterday's calls.
+    call_max_age: float = field(default_factory=lambda: _env_float("CFT_CALL_MAX_AGE", 900.0))
+
     def phone_overrides(self) -> dict:
         """The knobs the user actually set, to lay over the chosen preset."""
         return {

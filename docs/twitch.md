@@ -119,14 +119,22 @@ anonymously. The other two can't be obtained that way:
 
 Holding two websockets and a JSON parser inside a .NET 4.8 game script means
 extra DLLs in `scripts\` and one more way to crash the game mid-frame. So the
-sockets are held by the Python server, which is running anyway, and once a
-second the mod asks it `GET /events` the same way it already fetches audio.
+sockets are held by the Python server, which is running anyway.
+
+The server does the whole pipeline itself, and this is not just tidiness: a
+script gets **no tick at all** while the player sits in the pause menu, so a
+mod that waited for its own synthesis did nothing for as long as the menu was
+up. The server has no such problem. It speaks the line on its own thread and
+then keeps offering the finished call — once a second, forever — until the mod
+answers "got it", which it can only do once the player is back in the game.
 
 ```
-chat / subs / bits ──IRC──────────────► mod ──► call
-points ──EventSub──┐
-                   ├─► voice_server ──HTTP──► mod ──► call
-donations ──DonationAlerts──┘
+chat / subs / bits ──IRC──► mod ──POST /submit──┐
+points ──EventSub──────────────────────────────►├─► voice_server (speaks it)
+donations ──DonationAlerts─────────────────────►┘          │
+                                                           ▼
+                     mod ◄──GET /call──── "ready" (repeated until acked)
+                      └──POST /call/ack──► call is released
 ```
 
 ### Setting up points and donations
