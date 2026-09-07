@@ -8,7 +8,8 @@ device, past the engine. So the effect is rebuilt here, in the order applied:
   1. band-pass 300-3400 Hz - the telephone passband, and most of the effect.
   2. soft saturation      - the mild overdrive of a cheap handset.
   3. compression          - phone lines squash dynamics flat.
-  4. codec grit           - the aliasing burr of a low-bitrate speech codec.
+  4. codec grit           - the aliasing burr of a low-bitrate speech codec,
+                            off unless a preset asks for it.
   5. line noise           - a whisper of hiss, so the gaps are not dead silent.
 
 The result is normalised back up, because the band-pass throws away most of
@@ -44,7 +45,9 @@ class PhoneFX:
     compress_threshold: float = 0.25
 
     # Decimate to this rate and interpolate back, at this depth. 0 disables.
-    codec_rate: int = 8000
+    # Off by default: the aliasing burr smears the formants RVC just built, and
+    # the character stops being recognisable. `radio` still opts in.
+    codec_rate: int = 0
     codec_bits: int = 0
 
     # Line hiss, in dBFS relative to the normalised peak.
@@ -117,7 +120,7 @@ def apply(wav_bytes: bytes, fx: PhoneFX) -> bytes:
     audio = _compress(audio, sample_rate, fx)
     audio = _codec_grit(audio, sample_rate, fx)
     audio = _normalise(audio, fx.output_peak)
-    audio = _add_noise(audio, fx.noise_db)
+    audio = _add_noise(audio, sample_rate, fx)
 
     return _write_wav(np.clip(audio, -1.0, 1.0), sample_rate, channels, sample_width)
 
@@ -235,16 +238,28 @@ def _normalise(audio: np.ndarray, peak: float) -> np.ndarray:
     return (audio * (peak / current)).astype(np.float32)
 
 
-def _add_noise(audio: np.ndarray, noise_db: float) -> np.ndarray:
+def _add_noise(audio: np.ndarray, sample_rate: int, fx: PhoneFX) -> np.ndarray:
     """
-    A floor of hiss, added after normalisation so its level is absolute.
+    A floor of hiss, band-limited to the same passband as the voice and added
+    after normalisation so its level is absolute.
 
     Last, because run through the compressor it would breathe with the speech.
     """
-    if noise_db >= 0.0:
+    if fx.noise_db >= 0.0:
         return audio
-    amplitude = 10.0 ** (noise_db / 20.0)
+    amplitude = 10.0 ** (fx.noise_db / 20.0)
     noise = np.random.default_rng().standard_normal(audio.size).astype(np.float32)
+
+    nyquist = sample_rate / 2.0
+    low = max(fx.low_hz, 1.0) / nyquist
+    high = min(fx.high_hz / nyquist, 0.99)
+    if low < high:
+        sos = butter(fx.order, [low, high], btype="band", output="sos")
+        noise = sosfilt(sos, noise).astype(np.float32)
+        peak = float(np.max(np.abs(noise)))
+        if peak > 1e-8:
+            noise /= peak
+
     return (audio + noise * amplitude).astype(np.float32)
 
 

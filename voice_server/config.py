@@ -99,8 +99,8 @@ class Config:
     rvc_device: str = field(default_factory=lambda: _env_str("CFT_RVC_DEVICE", "cuda:0"))
     rvc_enabled: bool = field(default_factory=lambda: _env_bool("CFT_RVC_ENABLED", True))
     rvc_f0method: str = field(default_factory=lambda: _env_str("CFT_RVC_F0METHOD", "rmvpe"))
-    rvc_f0up_key: int = field(default_factory=lambda: _env_int("CFT_RVC_F0UP_KEY", 0))
-    rvc_index_rate: float = field(default_factory=lambda: _env_float("CFT_RVC_INDEX_RATE", 0.5))
+    rvc_f0up_key: int = field(default_factory=lambda: _env_int("CFT_RVC_F0UP_KEY", 4))
+    rvc_index_rate: float = field(default_factory=lambda: _env_float("CFT_RVC_INDEX_RATE", 0.7))
     rvc_protect: float = field(default_factory=lambda: _env_float("CFT_RVC_PROTECT", 0.33))
 
     # Telephone effect applied after RVC. See phone_fx.py.
